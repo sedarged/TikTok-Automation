@@ -155,6 +155,7 @@ export class MockImageGenerator implements ImageGenerator {
     // Sanitize prompt for drawtext
     const sanitizeForDrawtext = (text: string): string => {
       return text
+        .replace(/\\/g, '\\\\') // Escape backslashes first
         .replace(/:/g, '\\:')
         .replace(/'/g, "\\'")
         .replace(/"/g, '\\"');
