@@ -19,23 +19,25 @@ const asyncHandler = (fn: Function) => (req: Request, res: Response, next: NextF
  * Creates a new video generation job
  */
 export const createJob = asyncHandler(async (req: Request, res: Response): Promise<void> => {
-  const jobRequest: CreateJobRequest = req.body;
+  const jobRequest: CreateJobRequest = {
+    type: req.body.type || 'horror_video',
+    prompt: req.body.prompt,
+    story: req.body.story,
+    options: req.body.options,
+  };
 
-  // Validate request
-  if (!jobRequest.type) {
-    throw new AppError(400, 'Job type is required');
+  if (jobRequest.type !== 'horror_video') {
+    throw new AppError(400, 'Only horror_video jobs are supported at the moment');
   }
 
-  // Create job in queue
-  const job = jobQueue.createJob(jobRequest.type);
+  if (!jobRequest.prompt && !jobRequest.story) {
+    throw new AppError(400, 'Provide either a prompt or a full story payload');
+  }
+
+  const job = jobQueue.createJob(jobRequest);
 
   logger.info('Job created via API', { jobId: job.id, type: jobRequest.type });
 
-  // TODO: Start actual job processing
-  // - Queue job for background processing
-  // - Trigger story generation workflow
-  // - Return immediately with job ID
-  
   res.status(201).json({
     success: true,
     data: {

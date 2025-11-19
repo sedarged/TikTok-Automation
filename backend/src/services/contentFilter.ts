@@ -1,133 +1,76 @@
+import { StoryResult } from '../types';
 import logger from '../utils/logger';
-
-/**
- * Content moderation and filtering service
- * TODO: Integrate with content moderation API (OpenAI Moderation, Google Cloud, etc.)
- */
 
 export interface ContentModerationResult {
   safe: boolean;
-  categories: {
-    violence: boolean;
-    selfHarm: boolean;
-    sexual: boolean;
-    hateSpeech: boolean;
-    minors: boolean;
-  };
-  scores: {
-    violence: number;
-    selfHarm: number;
-    sexual: number;
-    hateSpeech: number;
-    minors: number;
-  };
   flagged: string[];
+  sanitizedText: string;
 }
 
-/**
- * Moderates text content for safety
- * Currently returns stub data allowing all content
- */
-export const moderateText = async (text: string): Promise<ContentModerationResult> => {
-  logger.info('Moderating text content', { textLength: text.length });
+const HARD_BANS: { pattern: RegExp; label: string }[] = [
+  { pattern: /suicide/i, label: 'self-harm' },
+  { pattern: /self-?harm/i, label: 'self-harm' },
+  { pattern: /sexual assault/i, label: 'sexual-content' },
+  { pattern: /child\s*(abuse|endangerment|victim)/i, label: 'minors' },
+  { pattern: /explicit sexual/i, label: 'sexual-content' },
+  { pattern: /real murder case/i, label: 'real-world-violence' },
+];
 
-  // TODO: Implement actual content moderation
-  // Example flow:
-  // 1. Call moderation API with text
-  // 2. Check against prohibited categories:
-  //    - Extreme violence/gore
-  //    - Self-harm content
-  //    - Sexual content
-  //    - Hate speech
-  //    - Content involving minors
-  // 3. Apply custom rules for horror content:
-  //    - Allow mild horror/suspense
-  //    - Block extreme/graphic content
-  //    - Block content that could trigger or harm
-  // 4. Return detailed moderation results
-  
-  // Stub implementation - allow everything
+const SOFT_REPLACEMENTS: { pattern: RegExp; replacement: string }[] = [
+  { pattern: /blood/gi, replacement: 'shadows' },
+  { pattern: /gore/gi, replacement: 'dread' },
+  { pattern: /corpse/gi, replacement: 'figure' },
+  { pattern: /kill(ed|s|ing)?/gi, replacement: 'silenced' },
+];
+
+export const moderateText = (text: string): ContentModerationResult => {
+  const flagged: string[] = [];
+  HARD_BANS.forEach(entry => {
+    if (entry.pattern.test(text)) {
+      flagged.push(entry.label);
+    }
+  });
+
+  let sanitizedText = text;
+  SOFT_REPLACEMENTS.forEach(replacement => {
+    sanitizedText = sanitizedText.replace(replacement.pattern, replacement.replacement);
+  });
+
   return {
-    safe: true,
-    categories: {
-      violence: false,
-      selfHarm: false,
-      sexual: false,
-      hateSpeech: false,
-      minors: false,
-    },
-    scores: {
-      violence: 0.0,
-      selfHarm: 0.0,
-      sexual: 0.0,
-      hateSpeech: 0.0,
-      minors: 0.0,
-    },
-    flagged: [],
+    safe: flagged.length === 0,
+    flagged,
+    sanitizedText,
   };
 };
 
-/**
- * Moderates image content
- */
-export const moderateImage = async (imageUrl: string): Promise<ContentModerationResult> => {
-  logger.info('Moderating image content', { imageUrl });
+export const sanitizeStory = (story: StoryResult): { story: StoryResult; flagged: string[] } => {
+  const flagged: Set<string> = new Set();
+  const sanitizedScenes = story.scenes.map(scene => {
+    const moderation = moderateText(scene.narration);
+    moderation.flagged.forEach(flag => flagged.add(flag));
+    return {
+      ...scene,
+      narration: moderation.sanitizedText,
+    };
+  });
 
-  // TODO: Implement image moderation
-  // Use services like Google Cloud Vision API, AWS Rekognition
-  
   return {
-    safe: true,
-    categories: {
-      violence: false,
-      selfHarm: false,
-      sexual: false,
-      hateSpeech: false,
-      minors: false,
+    story: {
+      ...story,
+      scenes: sanitizedScenes,
     },
-    scores: {
-      violence: 0.0,
-      selfHarm: 0.0,
-      sexual: 0.0,
-      hateSpeech: 0.0,
-      minors: 0.0,
-    },
-    flagged: [],
+    flagged: Array.from(flagged),
   };
 };
 
-/**
- * Checks if content passes all safety checks
- */
-export const isContentSafe = (result: ContentModerationResult): boolean => {
-  return result.safe && result.flagged.length === 0;
-};
-
-/**
- * Applies content filtering rules specific to horror content
- */
-export const applyHorrorContentRules = (text: string): boolean => {
-  logger.info('Applying horror content rules');
-
-  // TODO: Implement custom horror content rules
-  // Examples:
-  // - Allow suspense, mystery, supernatural themes
-  // - Block explicit gore descriptions
-  // - Block self-harm or suicide themes
-  // - Block content targeting children
-  // - Ensure content is appropriate for mature audiences
-  
-  // Check for prohibited keywords (stub)
-  const prohibitedKeywords = [
-    'suicide',
-    'self-harm',
-    'child abuse',
-  ];
-
-  const lowerText = text.toLowerCase();
-  const hasProhibited = prohibitedKeywords.some(keyword => 
-    lowerText.includes(keyword)
-  );
-
-  return !hasProhibited;
+export const ensureStoryIsSafe = (story: StoryResult): { safe: boolean; story: StoryResult; flagged: string[] } => {
+  const { story: sanitizedStory, flagged } = sanitizeStory(story);
+  const safe = flagged.length === 0;
+  if (!safe) {
+    logger.warn('Story flagged by moderation', {
+      storyId: story.id,
+      flagged,
+    });
+  }
+  return { safe, story: sanitizedStory, flagged };
 };
