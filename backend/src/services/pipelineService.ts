@@ -64,12 +64,12 @@ const ensureSafeStory = async (story: StoryResult, allowRetry: boolean, nichePro
   throw new Error('Story failed moderation or validation checks');
 };
 
-const attachVisuals = async (story: StoryResult): Promise<StoryResult> => {
+const attachVisuals = async (story: StoryResult, nicheProfile: NicheProfile, jobId: string): Promise<StoryResult> => {
   const scenes = [...story.scenes];
   for (let i = 0; i < scenes.length; i += 1) {
     const prompt = scenes[i].imagePrompt || scenes[i].description;
     // eslint-disable-next-line no-await-in-loop
-    const imagePath = await generateSceneImage(prompt, i);
+    const imagePath = await generateSceneImage(prompt, i, nicheProfile, jobId);
     scenes[i] = { ...scenes[i], assetPath: imagePath };
   }
   return { ...story, scenes };
@@ -107,7 +107,7 @@ const processJob = async (jobId: string, payload: JobPayload): Promise<JobResult
   jobQueue.registerProgress(jobId, 20, 'STORY_READY');
 
   const narrationText = story.scenes.map(scene => scene.narration).join(' ');
-  const narrationPath = await synthesizeSpeech(narrationText, config.tts.voiceId);
+  const narrationPath = await synthesizeSpeech(narrationText, undefined, nicheProfile);
   const narrationDuration = await getAudioDuration(narrationPath);
   jobQueue.registerProgress(jobId, 35, 'TTS_READY');
 
@@ -118,7 +118,7 @@ const processJob = async (jobId: string, payload: JobPayload): Promise<JobResult
   }));
   const storyWithDurations: StoryResult = { ...story, scenes: scenesWithDurations };
 
-  const storyWithVisuals = await attachVisuals(storyWithDurations);
+  const storyWithVisuals = await attachVisuals(storyWithDurations, nicheProfile, jobId);
   jobQueue.registerProgress(jobId, 55, 'VISUALS_READY');
 
   const captions = generateCaptions(storyWithVisuals.scenes);
