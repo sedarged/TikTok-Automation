@@ -1,7 +1,13 @@
 import { Router } from 'express';
-import { createJob, getJobStatus } from '../controllers/jobController';
+import { createJob, getJobStatus, listNiches } from '../controllers/jobController';
 
 const router = Router();
+
+/**
+ * List available niches
+ * GET /niches
+ */
+router.get('/niches', listNiches);
 
 /**
  * Create a new job
