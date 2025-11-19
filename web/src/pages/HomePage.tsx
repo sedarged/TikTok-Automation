@@ -25,7 +25,7 @@ const HomePage = () => {
 
   const submit = (evt: FormEvent) => {
     evt.preventDefault();
-    jobMutation.mutate({ prompt, nicheId: nicheId || niches[0]?.id, type: 'horror_video' });
+    jobMutation.mutate({ prompt, nicheId: nicheId || niches[0]?.id, type: 'video' });
   };
 
   return (

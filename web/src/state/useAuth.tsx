@@ -1,6 +1,17 @@
-import { useCallback, useState } from 'react';
+import { createContext, useCallback, useContext, useState, ReactNode } from 'react';
 
-export const useAuth = () => {
+// WARNING: Using localStorage for authentication state is insecure and vulnerable to XSS attacks.
+// This is a placeholder implementation ONLY. Replace with httpOnly cookies or a secure session mechanism before production.
+
+interface AuthContextType {
+  isAuthenticated: boolean;
+  login: () => void;
+  logout: () => void;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [isAuthenticated, setAuthenticated] = useState(() => {
     return localStorage.getItem('demo-auth') === 'true';
   });
@@ -15,5 +26,17 @@ export const useAuth = () => {
     setAuthenticated(false);
   }, []);
 
-  return { isAuthenticated, login, logout };
+  return (
+    <AuthContext.Provider value={{ isAuthenticated, login, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
 };
