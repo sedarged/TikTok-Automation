@@ -87,6 +87,7 @@ export interface RenderOptions {
 
 export interface CreateJobRequest {
   type: string;
+  nicheId?: string;  // Optional for backward compatibility
   prompt?: string;
   story?: StoryInput;
   options?: Partial<RenderOptions>;
