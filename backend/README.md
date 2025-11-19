@@ -1,20 +1,31 @@
-# Horror TikTok Backend
+# Multi-Niche TikTok Automation Backend
 
-Backend service for the automated horror TikTok video generation pipeline.
+Backend service for automated TikTok video generation across multiple content niches.
 
 ## Overview
 
-This Node.js + TypeScript service turns a short horror prompt (or a fully provided script) into a ready-to-upload 9:16 MP4 complete with captions and publishing metadata.
+This Node.js + TypeScript service turns a short prompt into a ready-to-upload 9:16 MP4 complete with AI-generated content, narration, visuals, captions, and TikTok-optimized metadata.
 
-Pipeline stages:
+**Multi-Niche Support**: Create content for horror stories, Reddit narratives, motivational content, business facts, and more - all from the same engine with niche-specific configurations.
 
-1. **Story crafting** – generate or validate a 140–180 word horror script with hook, build-up, twist and chilling ending.
-2. **Content safety** – soften risky terms and reject scripts that violate policy (self-harm, minors, sexual violence, real crimes, etc.).
-3. **Narration** – synthesize a placeholder vocal track (swap with your preferred TTS provider later).
-4. **Visuals** – create eerie scene cards (mocked via ffmpeg drawtext; pluggable for Stable Diffusion, Midjourney, etc.).
-5. **Captions** – auto-split narration into time-coded SRT subtitles and optionally burn them into the video.
-6. **Rendering** – stitch visuals, subtle glitch transitions, narration, ambient bed and captions into a 1080x1920 MP4 using ffmpeg.
-7. **Delivery** – save video + SRT into `/output`, return TikTok-ready description/hashtags and metadata via the jobs API.
+### Pipeline Stages
+
+1. **Story Generation** – AI-powered (GPT) or deterministic story generation with niche-specific tone and structure
+2. **Content Safety** – Filter and sanitize content to meet platform policies
+3. **Narration** – Professional TTS using OpenAI voices or mock audio for testing
+4. **Visuals** – AI image generation (DALL-E) or placeholder cards
+5. **Captions** – Auto-generated SRT subtitles with customizable styling
+6. **Rendering** – ffmpeg-based assembly into 1080x1920 MP4 with transitions and music
+7. **Delivery** – Local/S3 storage with TikTok-ready metadata
+
+## Key Features
+
+✨ **Multi-Niche Architecture** - Easily configure different content types  
+🤖 **AI-Powered** - OpenAI GPT, TTS, and DALL-E integration  
+🔌 **Pluggable Services** - Swap providers via environment config  
+📐 **Type-Safe** - TypeScript strict mode with Zod validation  
+📊 **Observable** - Comprehensive logging and error tracking  
+🧪 **Testable** - Mocked services for development without API costs
 
 ## Setup
 
@@ -22,6 +33,7 @@ Requirements:
 
 - Node.js 20+
 - ffmpeg & ffprobe available on `PATH`
+- OpenAI API key (optional, for AI features)
 
 Install dependencies:
 
@@ -35,19 +47,21 @@ Copy env template:
 cp .env.example .env
 ```
 
+### Environment Configuration
+
 Key variables:
 
-| Variable | Description |
-| --- | --- |
-| `PORT` | Express server port |
-| `OUTPUT_DIR` | Folder for ready videos/subtitles |
-| `ASSETS_DIR` | Temp working directory for audio/images/intermediate files |
-| `MIN_STORY_WORD_COUNT` / `MAX_STORY_WORD_COUNT` | Safety rails for generated copy |
-| `TTS_*` | Plug your favourite text-to-speech API (mock tone out of the box) |
-| `IMAGE_*` | Placeholder for Stable Diffusion / Midjourney credentials |
-| `RENDER_*` | 9:16 output options, caption/music toggles, glitch transitions |
+| Variable | Description | Default |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | OpenAI API key for AI features | - |
+| `TTS_PROVIDER` | TTS provider: `openai`, `mock` | `mock` |
+| `IMAGE_PROVIDER` | Image provider: `openai`, `mock` | `mock` |
+| `OPENAI_MODEL` | GPT model for stories | `gpt-4o-mini` |
+| `PORT` | Express server port | `3000` |
+| `OUTPUT_DIR` | Folder for output videos/subtitles | `./output` |
+| `ASSETS_DIR` | Temp working directory | `./assets` |
 
-> The repo ships with mock TTS + visuals powered purely by ffmpeg so you can run the entire stack locally. Swap the implementations in `src/services/ttsService.ts` and `src/services/visualService.ts` when you connect real providers.
+> The system ships with mock TTS + visuals powered by ffmpeg, allowing you to run the entire pipeline locally without API costs. Enable AI features by setting providers to `openai` and adding your API key.
 
 ## Development & build
 
@@ -69,14 +83,32 @@ npm test
 
 ### `GET /health`
 
-Returns JSON with service version, ffmpeg availability, and live job stats.
+Returns JSON with service version, ffmpeg availability, and job statistics.
 
-### `POST /jobs`
+### `GET /niches`
+
+List available niche profiles.
 
 ```json
 {
-  "type": "horror_video",
-  "prompt": "Whispered coordinates that keep appearing in my stream chat"
+  "success": true,
+  "data": {
+    "niches": [
+      { "id": "horror", "name": "Horror & Creepy Stories" },
+      { "id": "reddit_stories", "name": "Reddit Stories" }
+    ]
+  }
+}
+```
+
+### `POST /jobs`
+
+Create a new video generation job.
+
+```json
+{
+  "nicheId": "horror",
+  "prompt": "Whispered coordinates appearing in my stream chat"
 }
 ```
 
@@ -84,18 +116,34 @@ Fields:
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `type` | yes | Currently only `horror_video` |
-| `prompt` | yes* | Short seed idea for internal story generator |
-| `story` | optional | Provide `{ title?, description?, scenes: [{ description, narration, imagePrompt?, duration? }] }` to bypass AI story creation |
-| `options` | optional | Override render defaults (fps, captions, music, glitch toggles, etc.) |
+| `nicheId` | yes | Niche profile ID (e.g., "horror", "reddit_stories") |
+| `prompt` | yes* | Short seed idea for AI story generation |
+| `story` | optional | Full story structure `{ title?, description?, scenes: [...] }` |
+| `options` | optional | Override render defaults (fps, captions, music, etc.) |
 
-Either `prompt` or `story` must be supplied.
+*Either `prompt` or `story` must be supplied.
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "jobId": "job_1234567890_abc123",
+    "status": "pending",
+    "nicheId": "horror",
+    "createdAt": "2025-11-19T17:00:00.000Z"
+  }
+}
+```
 
 ### `GET /jobs/:id`
 
+Get job status and results.
+
 Returns `{ status: "pending" | "running" | "failed" | "completed", progress, result? }`.
 
-Successful payload excerpt:
+**Completed job example:**
 
 ```json
 {
@@ -104,14 +152,14 @@ Successful payload excerpt:
     "id": "job_...",
     "status": "completed",
     "result": {
-      "videoUrl": "file:///workspace/TikTok-Automation/backend/output/job_...mp4",
+      "videoPath": "/path/to/output/job_....mp4",
+      "videoUrl": "http://localhost:3000/output/job_....mp4",
       "subtitlePath": ".../job_....srt",
-      "description": "The Midnight Echo — I hit record the moment...",
-      "hashtags": ["#horrortok", "#scarystory", "#aivideo", "#nightshift"],
+      "description": "The Midnight Echo — I hit record...",
+      "hashtags": ["#horrortok", "#scarystory", "#fyp"],
       "metadata": {
         "durationSeconds": 60,
-        "numberOfScenes": 4,
-        "outputPath": "/workspace/.../output/job_....mp4"
+        "numberOfScenes": 4
       }
     }
   }
@@ -122,39 +170,110 @@ Successful payload excerpt:
 
 ```
 src/
-├── config/            # Env + defaults
+├── clients/           # External service clients
+│   ├── llmClient.ts       # OpenAI GPT for story generation
+│   ├── ttsEngine.ts       # TTS providers (OpenAI, mock)
+│   └── imageGenerator.ts  # Image generators (DALL-E, mock)
+├── config/            # Configuration & niche profiles
+│   ├── env.ts             # Validated environment config
+│   ├── niches.ts          # Niche profile definitions
+│   └── nicheLoader.ts     # Profile registry
 ├── controllers/       # HTTP handlers
 ├── routes/            # Express routers
 ├── services/
 │   ├── pipelineService.ts   # Orchestrates full job workflow
-│   ├── jobQueue.ts          # In-memory queue/worker
-│   ├── storyService.ts      # Deterministic story generator
-│   ├── contentFilter.ts     # Safety + sanitiser
-│   ├── ttsService.ts        # Mock TTS (swap with real provider)
-│   ├── visualService.ts     # Placeholder cards via ffmpeg drawtext
-│   ├── renderService.ts     # ffmpeg slideshow + audio mixing
-│   ├── captionService.ts    # Sentence-based caption timing
-│   └── storageService.ts    # Local persistence (swap with S3/R2)
-├── types/             # Shared interfaces
+│   ├── jobQueue.ts          # In-memory or Redis queue
+│   ├── storyService.ts      # AI or deterministic story generator
+│   ├── contentFilter.ts     # Safety & sanitization
+│   ├── ttsService.ts        # Text-to-speech orchestration
+│   ├── visualService.ts     # Image generation orchestration
+│   ├── renderService.ts     # ffmpeg video assembly
+│   ├── captionService.ts    # SRT generation
+│   └── storageService.ts    # Local/S3 persistence
+├── types/             # Shared TypeScript interfaces
+│   ├── index.ts           # Core types
+│   └── niche.ts           # Niche profile types
 └── utils/             # Logger, command runner, file helpers
 ```
 
 ## Customisation guide
 
-| Layer | File | Notes |
-| --- | --- | --- |
-| Story | `src/services/storyService.ts` | Replace deterministic generator with GPT/Claude. Keep `StoryResult` shape. |
-| TTS | `src/services/ttsService.ts` | Call ElevenLabs/OpenAI Speech, save WAV/MP3 locally, return path. |
-| Visuals | `src/services/visualService.ts` | Call Stable Diffusion/SDXL/text-to-video provider; store returned file path. |
-| Moderation | `src/services/contentFilter.ts` | Integrate OpenAI Moderation, AWS Comprehend, or bespoke rules. |
-| Storage | `src/services/storageService.ts` | Upload to S3/R2/Supabase and update `getPublicUrl`. |
-| Queue | `src/services/jobQueue.ts` | Swap the in-memory queue for BullMQ/Redis for persistence + concurrency. |
+### Adding a New Niche
+
+1. **Define the profile** in `src/config/niches.ts`:
+
+```typescript
+export const myNiche: NicheProfile = {
+  id: 'my_niche',
+  name: 'My Niche Name',
+  storyStyle: {
+    defaultLengthSeconds: 60,
+    tone: 'engaging, informative',
+    structureTemplate: ['hook', 'content', 'conclusion'],
+    targetWordCount: { min: 150, max: 200 },
+  },
+  visuals: {
+    baseStylePrompt: 'modern, clean, professional',
+    preferredVisualMode: 'ai_images',
+    numScenes: 4,
+    imageSize: '1024x1792',
+  },
+  voice: {
+    provider: 'openai_tts',
+    voiceId: 'nova',
+    speed: 1.0,
+    model: 'tts-1',
+  },
+  // ... other settings
+};
+```
+
+2. **Register it** in `src/config/nicheLoader.ts`:
+
+```typescript
+const profiles = [horrorProfile, redditStoriesProfile, myNiche];
+```
+
+### Swapping Providers
+
+Change in `.env`:
+
+```bash
+# Use OpenAI for everything
+TTS_PROVIDER=openai
+IMAGE_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+
+# Or use mocks for development
+TTS_PROVIDER=mock
+IMAGE_PROVIDER=mock
+```
+
+### Extending Services
+
+| Layer | How to Extend |
+| --- | --- |
+| **Story** | Implement new LLM provider in `clients/` |
+| **TTS** | Add engine to `clients/ttsEngine.ts` (e.g., ElevenLabs) |
+| **Images** | Add generator to `clients/imageGenerator.ts` |
+| **Storage** | Implement S3/R2 in `services/storageService.ts` |
+| **Queue** | Add Redis/BullMQ support in `services/jobQueue.ts` |
 
 ## Known limitations
 
-- Mock TTS + visuals are tonal placeholders; replace before publishing widely.
-- Job queue is in-memory; restart wipes active jobs.
-- Background ambience uses ffmpeg-generated noise. Bring your own licensed stems if preferred.
+- Job queue is in-memory (switch to Redis for persistence)
+- Background music uses ffmpeg-generated noise (add real audio library)
+- S3/R2 storage not yet implemented (files stored locally)
+- TikTok auto-posting not implemented (webhook hooks available)
+
+## Niche Profiles
+
+Built-in niches:
+
+- **horror** - Creepy short-form horror with dark visuals, tense narration
+- **reddit_stories** - Conversational Reddit storytelling with clean visuals
+
+Add custom niches in `src/config/niches.ts`.
 
 ## Output
 

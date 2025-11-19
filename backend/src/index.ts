@@ -1,6 +1,7 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import config from './config/config';
+import { initializeNicheProfiles } from './config/nicheLoader';
 import healthRoutes from './routes/healthRoutes';
 import jobRoutes from './routes/jobRoutes';
 import { errorHandler } from './utils/errorHandler';
@@ -11,7 +12,12 @@ import { initializeJobPipeline } from './services/pipelineService';
  * Initialize and configure Express application
  */
 const createApp = (): Express => {
+  // Initialize niche profiles
+  initializeNicheProfiles();
+  
+  // Initialize job pipeline
   initializeJobPipeline();
+  
   const app = express();
 
   // Middleware

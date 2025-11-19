@@ -1,62 +1,62 @@
 import fs from 'fs/promises';
 import path from 'path';
 import config from '../config/config';
+import { NicheProfile } from '../types/niche';
 import logger from '../utils/logger';
 import { ensureDirectory } from '../utils/fileUtils';
 import { runCommand } from '../utils/command';
+import { ttsEngine } from '../clients/ttsEngine';
 
 export interface TTSOptions {
   text: string;
   voiceId?: string;
+  nicheProfile?: NicheProfile;
 }
 
 const AUDIO_DIR = path.join(config.assetsDir, 'audio');
 
-const estimateDurationFromText = (text: string): number => {
-  const words = text.trim().split(/\s+/).length;
-  const estimated = (words / 155) * 60;
-  return Math.min(Math.max(estimated, 40), config.maxVideoDurationSeconds);
-};
-
-export const synthesizeSpeech = async (text: string, voiceId?: string): Promise<string> => {
+/**
+ * Synthesize speech using the configured TTS engine
+ */
+export const synthesizeSpeech = async (
+  text: string, 
+  voiceId?: string,
+  nicheProfile?: NicheProfile
+): Promise<string> => {
   await ensureDirectory(AUDIO_DIR);
   const narration = text.trim();
   if (!narration) {
     throw new Error('Cannot synthesize empty narration');
   }
 
-  const duration = estimateDurationFromText(narration);
-  const fileName = `narration_${Date.now()}.wav`;
-  const outputPath = path.join(AUDIO_DIR, fileName);
-  const freq = 140 + Math.floor(Math.random() * 30);
+  // Use niche profile voice settings if available
+  const effectiveVoiceId = nicheProfile?.voice.voiceId || voiceId || config.tts.voiceId;
+  const speed = nicheProfile?.voice.speed || 1.0;
+  const jobId = `job_${Date.now()}`;
 
-  logger.info('Synthesizing placeholder narration', {
-    voice: voiceId || config.tts.mockVoice,
-    duration,
-    outputPath,
+  logger.info('Synthesizing speech', {
+    provider: ttsEngine.isAvailable() ? 'configured' : 'mock',
+    voiceId: effectiveVoiceId,
+    textLength: narration.length,
+    nicheId: nicheProfile?.id,
   });
 
-  await runCommand('ffmpeg', [
-    '-y',
-    '-f',
-    'lavfi',
-    '-i',
-    `sine=frequency=${freq}:duration=${duration}:sample_rate=44100`,
-    '-f',
-    'lavfi',
-    '-i',
-    `anoisesrc=color=pink:amplitude=0.04:duration=${duration}`,
-    '-filter_complex',
-    '[0:a]volume=0.25,apulsator=mode=sine:amount=0.03[a0];[1:a]volume=0.15[a1];[a0][a1]amix=inputs=2:duration=longest,afade=t=in:ss=0:d=1.5,afade=t=out:st=' +
-      `${Math.max(duration - 1.5, 0)}:d=1.5`,
-    '-ar',
-    '44100',
-    '-ac',
-    '1',
-    outputPath,
-  ], { logLabel: 'mock-tts' });
+  try {
+    const audioPath = await ttsEngine.synthesize({
+      text: narration,
+      jobId,
+      voiceId: effectiveVoiceId,
+      speed,
+      nicheProfile,
+    });
 
-  return outputPath;
+    return audioPath;
+  } catch (error) {
+    logger.error('Speech synthesis failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 };
 
 export const getAudioDuration = async (audioPath: string): Promise<number> => {

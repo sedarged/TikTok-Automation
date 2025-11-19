@@ -1,4 +1,5 @@
 import config from '../config/config';
+import { getNicheProfile } from '../config/nicheLoader';
 import { generateStory, buildStoryFromInput, StoryGenerationOptions, validateStory } from './storyService';
 import { ensureStoryIsSafe } from './contentFilter';
 import { generateSceneImage } from './visualService';
@@ -8,6 +9,7 @@ import { renderVideo } from './renderService';
 import { getPublicUrl, saveToOutput } from './storageService';
 import jobQueue, { JobPayload } from './jobQueue';
 import { CreateJobRequest, JobResultData, Scene, StoryResult } from '../types';
+import { NicheProfile } from '../types/niche';
 import logger from '../utils/logger';
 import { ensureDirectory } from '../utils/fileUtils';
 
@@ -21,16 +23,17 @@ const allocateDurations = (scenes: Scene[], targetDuration: number): number[] =>
   return weights.map(weight => parseFloat(((weight / total) * targetDuration).toFixed(2)));
 };
 
-const buildDescription = (story: StoryResult): string => {
+const buildDescription = (story: StoryResult, nicheProfile: NicheProfile): string => {
   const hook = story.scenes[0]?.narration.split('.').slice(0, 1).join('.');
-  return `${story.title} — ${hook} #StayUnsettled`;
+  const ctaPhrase = nicheProfile.hashtagsAndMetadata.ctaPhrases?.[0] || 'Stay tuned';
+  return `${story.title} — ${hook} #${ctaPhrase}`;
 };
 
-const buildHashtags = (): string[] => {
-  return ['#horrortok', '#scarystory', '#aivideo', '#nightshift', '#spooky', '#fyp'];
+const buildHashtags = (nicheProfile: NicheProfile): string[] => {
+  return nicheProfile.hashtagsAndMetadata.defaultHashtags;
 };
 
-const prepareStory = async (request: CreateJobRequest): Promise<StoryResult> => {
+const prepareStory = async (request: CreateJobRequest, nicheProfile: NicheProfile): Promise<StoryResult> => {
   if (request.story) {
     return buildStoryFromInput(request.story);
   }
@@ -38,11 +41,12 @@ const prepareStory = async (request: CreateJobRequest): Promise<StoryResult> => 
     prompt: request.prompt,
     maxScenes: config.maxScenes,
     targetDurationSeconds: config.maxVideoDurationSeconds,
+    nicheProfile,
   };
   return generateStory(storyOptions);
 };
 
-const ensureSafeStory = async (story: StoryResult, allowRetry: boolean): Promise<StoryResult> => {
+const ensureSafeStory = async (story: StoryResult, allowRetry: boolean, nicheProfile: NicheProfile): Promise<StoryResult> => {
   let current = story;
   for (let attempt = 0; attempt < (allowRetry ? 2 : 1); attempt += 1) {
     const { safe, story: sanitized, flagged } = ensureStoryIsSafe(current);
@@ -50,18 +54,22 @@ const ensureSafeStory = async (story: StoryResult, allowRetry: boolean): Promise
       return sanitized;
     }
     if (!allowRetry) break;
-    current = await generateStory({ prompt: sanitized.title, maxScenes: config.maxScenes });
+    current = await generateStory({ 
+      prompt: sanitized.title, 
+      maxScenes: config.maxScenes,
+      nicheProfile,
+    });
     logger.warn('Regenerating story due to moderation flags', { flagged });
   }
   throw new Error('Story failed moderation or validation checks');
 };
 
-const attachVisuals = async (story: StoryResult): Promise<StoryResult> => {
+const attachVisuals = async (story: StoryResult, nicheProfile: NicheProfile, jobId: string): Promise<StoryResult> => {
   const scenes = [...story.scenes];
   for (let i = 0; i < scenes.length; i += 1) {
     const prompt = scenes[i].imagePrompt || scenes[i].description;
     // eslint-disable-next-line no-await-in-loop
-    const imagePath = await generateSceneImage(prompt, i);
+    const imagePath = await generateSceneImage(prompt, i, nicheProfile, jobId);
     scenes[i] = { ...scenes[i], assetPath: imagePath };
   }
   return { ...story, scenes };
@@ -77,23 +85,29 @@ const buildRenderScenes = (scenes: Scene[]): { imagePath: string; duration: numb
 
 const processJob = async (jobId: string, payload: JobPayload): Promise<JobResultData> => {
   const request = payload.request;
-  if (request.type !== 'horror_video') {
-    throw new Error(`Unsupported job type: ${request.type}`);
-  }
+  
+  // Determine niche profile (default to 'horror' for backward compatibility)
+  const nicheId = request.nicheId || 'horror';
+  const nicheProfile = getNicheProfile(nicheId);
+  
+  logger.info('Starting job pipeline', { 
+    jobId, 
+    nicheId, 
+    stage: 'INIT',
+    type: request.type,
+  });
 
   await ensureDirectory(config.assetsDir);
-
-  logger.info('Starting job pipeline', { jobId, stage: 'INIT' });
   jobQueue.registerProgress(jobId, 5, 'INIT');
 
-  const storyDraft = await prepareStory(request);
-  const story = await ensureSafeStory(storyDraft, !request.story);
+  const storyDraft = await prepareStory(request, nicheProfile);
+  const story = await ensureSafeStory(storyDraft, !request.story, nicheProfile);
 
-  logger.info('Story ready', { jobId, stage: 'STORY', scenes: story.scenes.length });
+  logger.info('Story ready', { jobId, nicheId, stage: 'STORY', scenes: story.scenes.length });
   jobQueue.registerProgress(jobId, 20, 'STORY_READY');
 
   const narrationText = story.scenes.map(scene => scene.narration).join(' ');
-  const narrationPath = await synthesizeSpeech(narrationText, config.tts.voiceId);
+  const narrationPath = await synthesizeSpeech(narrationText, undefined, nicheProfile);
   const narrationDuration = await getAudioDuration(narrationPath);
   jobQueue.registerProgress(jobId, 35, 'TTS_READY');
 
@@ -104,7 +118,7 @@ const processJob = async (jobId: string, payload: JobPayload): Promise<JobResult
   }));
   const storyWithDurations: StoryResult = { ...story, scenes: scenesWithDurations };
 
-  const storyWithVisuals = await attachVisuals(storyWithDurations);
+  const storyWithVisuals = await attachVisuals(storyWithDurations, nicheProfile, jobId);
   jobQueue.registerProgress(jobId, 55, 'VISUALS_READY');
 
   const captions = generateCaptions(storyWithVisuals.scenes);
@@ -128,8 +142,8 @@ const processJob = async (jobId: string, payload: JobPayload): Promise<JobResult
     videoPath: savedVideoPath,
     videoUrl,
     subtitlePath: subtitlesPath,
-    description: buildDescription(storyWithVisuals),
-    hashtags: buildHashtags(),
+    description: buildDescription(storyWithVisuals, nicheProfile),
+    hashtags: buildHashtags(nicheProfile),
     metadata: {
       durationSeconds: renderResult.duration,
       numberOfScenes: storyWithVisuals.scenes.length,

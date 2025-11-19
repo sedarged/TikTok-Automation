@@ -1,13 +1,16 @@
 import { randomUUID } from 'crypto';
 import config from '../config/config';
 import { Scene, StoryInput, StoryResult } from '../types';
+import { NicheProfile } from '../types/niche';
 import logger from '../utils/logger';
+import { llmClient } from '../clients/llmClient';
 
 export interface StoryGenerationOptions {
   prompt?: string;
   maxScenes?: number;
   targetDurationSeconds?: number;
   genre?: string;
+  nicheProfile?: NicheProfile;
 }
 
 const HOOKS = [
@@ -123,6 +126,78 @@ export const buildStoryFromInput = (input: StoryInput): StoryResult => {
 export const generateStory = async (
   options: StoryGenerationOptions = {}
 ): Promise<StoryResult> => {
+  // If niche profile is provided and LLM is available, use AI generation
+  if (options.nicheProfile && llmClient.isAvailable()) {
+    return generateStoryWithLLM(options);
+  }
+
+  // Fallback to deterministic generation
+  return generateStoryDeterministic(options);
+};
+
+/**
+ * Generate story using OpenAI LLM (AI-powered)
+ */
+const generateStoryWithLLM = async (
+  options: StoryGenerationOptions
+): Promise<StoryResult> => {
+  const { nicheProfile, prompt, maxScenes, targetDurationSeconds } = options;
+  
+  if (!nicheProfile) {
+    throw new Error('Niche profile required for LLM-based story generation');
+  }
+
+  const seedPrompt = prompt?.trim() || 'Create an engaging story for this niche';
+
+  logger.info('Generating story with LLM', {
+    nicheId: nicheProfile.id,
+    prompt: seedPrompt,
+  });
+
+  try {
+    const llmStory = await llmClient.generateWithRetry({
+      prompt: seedPrompt,
+      nicheProfile,
+      maxScenes,
+      targetDurationSeconds,
+    });
+
+    // Convert LLM output to StoryResult format
+    const scenes: Scene[] = llmStory.scenes.map((scene, index) => ({
+      id: `scene_${index + 1}`,
+      order: index + 1,
+      description: scene.description,
+      narration: scene.narration,
+      imagePrompt: scene.imagePrompt,
+    }));
+
+    const totalWords = scenes.reduce((total, scene) => total + wordCount(scene.narration), 0);
+    const estimatedDuration = clamp((totalWords / 155) * 60, 45, config.maxVideoDurationSeconds);
+
+    return {
+      id: `story_${randomUUID()}`,
+      title: llmStory.title,
+      description: llmStory.description,
+      scenes,
+      totalDuration: estimatedDuration,
+      createdAt: new Date(),
+      wordCount: totalWords,
+    };
+  } catch (error) {
+    logger.warn('LLM story generation failed, falling back to deterministic', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    // Fallback to deterministic generation
+    return generateStoryDeterministic(options);
+  }
+};
+
+/**
+ * Generate story using deterministic/template-based approach (fallback)
+ */
+const generateStoryDeterministic = async (
+  options: StoryGenerationOptions = {}
+): Promise<StoryResult> => {
   const targetWordCount = clamp(
     options.targetDurationSeconds
       ? Math.round((options.targetDurationSeconds / 60) * 155)
@@ -136,7 +211,7 @@ export const generateStory = async (
   );
 
   const basePrompt = options.prompt?.trim() || 'abandoned lighthouse on a fog-soaked cliff';
-  logger.info('Generating structured story', { targetWordCount, basePrompt });
+  logger.info('Generating structured story (deterministic)', { targetWordCount, basePrompt });
 
   const weightMap = [0.2, 0.3, 0.28, 0.22];
   const scenes: Scene[] = ['hook', 'build', 'twist', 'ending'].map((stage, index) =>
