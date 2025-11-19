@@ -5,11 +5,13 @@ import healthRoutes from './routes/healthRoutes';
 import jobRoutes from './routes/jobRoutes';
 import { errorHandler } from './utils/errorHandler';
 import logger from './utils/logger';
+import { initializeJobPipeline } from './services/pipelineService';
 
 /**
  * Initialize and configure Express application
  */
 const createApp = (): Express => {
+  initializeJobPipeline();
   const app = express();
 
   // Middleware

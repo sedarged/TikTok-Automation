@@ -1,118 +1,207 @@
-import { RenderOptions, Scene } from '../types';
-import logger from '../utils/logger';
+import fs from 'fs/promises';
+import path from 'path';
+import config from '../config/config';
+import { RenderOptions, RenderResult, RenderSceneInput } from '../types';
+import { ensureDirectory } from '../utils/fileUtils';
+import { runCommand } from '../utils/command';
 
-/**
- * Video rendering service using ffmpeg
- * TODO: Implement actual ffmpeg video pipeline
- */
+export interface RenderRequest {
+  jobId: string;
+  scenes: RenderSceneInput[];
+  narrationAudioPath: string;
+  narrationDuration: number;
+  subtitlesPath?: string;
+  options?: Partial<RenderOptions>;
+}
 
-/**
- * Renders a complete video from scenes
- * Currently returns stub data
- */
-export const renderVideo = async (
-  scenes: Scene[],
+const JOB_DIR = path.join(config.assetsDir, 'jobs');
+
+const mergeOptions = (options?: Partial<RenderOptions>): RenderOptions => ({
+  ...config.render,
+  ...(options || {}),
+});
+
+const createSceneSegment = async (
+  scene: RenderSceneInput,
+  segmentPath: string,
   options: RenderOptions
-): Promise<string> => {
-  logger.info('Rendering video', { sceneCount: scenes.length, options });
+): Promise<void> => {
+  const filters = [
+    `scale=${options.width}:${options.height}:force_original_aspect_ratio=cover`,
+    `crop=${options.width}:${options.height}`,
+    'format=yuv420p',
+  ];
+  if (options.darkGrade) {
+    filters.push('eq=brightness=-0.08:saturation=0.92');
+  }
+  if (options.vignette) {
+    filters.push('vignette=PI/6');
+  }
 
-  // TODO: Implement actual video rendering with ffmpeg
-  // Example flow:
-  // 1. Prepare working directory
-  // 2. For each scene:
-  //    - Download image asset
-  //    - Download audio asset
-  //    - Create video segment (image + audio)
-  //    - Apply Ken Burns effect or zoom animations
-  // 3. Concatenate all segments
-  // 4. Add transitions between scenes
-  // 5. If includeCaptions: overlay captions
-  // 6. If includeMusic: mix background music
-  // 7. Apply final color grading/effects
-  // 8. Encode to target format (H.264/H.265)
-  // 9. Save final video
-  // 10. Clean up temporary files
-  
-  // Stub implementation - return mock video path
-  return `https://storage.example.com/videos/horror_${Date.now()}.mp4`;
+  await runCommand('ffmpeg', [
+    '-y',
+    '-loop',
+    '1',
+    '-i',
+    scene.imagePath,
+    '-t',
+    scene.duration.toFixed(2),
+    '-r',
+    options.fps.toString(),
+    '-vf',
+    filters.join(','),
+    '-c:v',
+    'libx264',
+    '-pix_fmt',
+    'yuv420p',
+    '-an',
+    segmentPath,
+  ], { logLabel: 'scene-segment' });
 };
 
-/**
- * Creates a video segment from an image and audio
- */
-export const createSceneSegment = async (
-  imagePath: string,
-  audioPath: string,
-  duration: number
-): Promise<string> => {
-  logger.info('Creating scene segment', { imagePath, audioPath, duration });
-
-  // TODO: Implement with ffmpeg
-  // ffmpeg -loop 1 -i image.png -i audio.mp3 -c:v libx264 -tune stillimage 
-  //        -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -t duration output.mp4
-  
-  return `segment_${Date.now()}.mp4`;
+const createGlitchSegment = async (
+  glitchPath: string,
+  options: RenderOptions,
+  duration = 0.4
+): Promise<void> => {
+  await runCommand('ffmpeg', [
+    '-y',
+    '-f',
+    'lavfi',
+    '-i',
+    `rgbtestsrc=size=${options.width}x${options.height}:rate=${options.fps}`,
+    '-vf',
+    "format=yuv420p,hue=s=2,tblend=all_mode='xor'",
+    '-t',
+    duration.toString(),
+    glitchPath,
+  ], { logLabel: 'glitch-transition' });
 };
 
-/**
- * Concatenates multiple video segments
- */
-export const concatenateVideos = async (videoPaths: string[]): Promise<string> => {
-  logger.info('Concatenating videos', { count: videoPaths.length });
-
-  // TODO: Implement with ffmpeg concat demuxer
-  // Create concat file listing all videos
-  // ffmpeg -f concat -safe 0 -i concat.txt -c copy output.mp4
-  
-  return `concatenated_${Date.now()}.mp4`;
+const concatSegments = async (segments: string[], outputPath: string): Promise<void> => {
+  const concatFile = `${outputPath}.txt`;
+  const content = segments
+    .map(segment => `file '${segment.replace(/'/g, "'\\''")}'`)
+    .join('\n');
+  await fs.writeFile(concatFile, content, 'utf-8');
+  await runCommand('ffmpeg', [
+    '-y',
+    '-f',
+    'concat',
+    '-safe',
+    '0',
+    '-i',
+    concatFile,
+    '-c',
+    'copy',
+    outputPath,
+  ], { logLabel: 'concat' });
 };
 
-/**
- * Adds captions/subtitles overlay to video
- */
-export const addCaptions = async (
-  videoPath: string,
-  captionPath: string
-): Promise<string> => {
-  logger.info('Adding captions', { videoPath, captionPath });
-
-  // TODO: Implement subtitle burning with ffmpeg
-  // ffmpeg -i video.mp4 -vf subtitles=captions.srt output.mp4
-  
-  return videoPath;
+const createAmbientBed = async (audioPath: string, duration: number, volume: number): Promise<void> => {
+  await runCommand('ffmpeg', [
+    '-y',
+    '-f',
+    'lavfi',
+    '-i',
+    `anoisesrc=color=brown:amplitude=0.04:duration=${duration}`,
+    '-filter:a',
+    `volume=${volume}`,
+    audioPath,
+  ], { logLabel: 'ambient-bed' });
 };
 
-/**
- * Mixes background music with video audio
- */
-export const mixBackgroundMusic = async (
-  videoPath: string,
-  musicPath: string,
-  musicVolume: number = 0.2
-): Promise<string> => {
-  logger.info('Mixing background music', { videoPath, musicPath, musicVolume });
-
-  // TODO: Implement audio mixing with ffmpeg
-  // ffmpeg -i video.mp4 -i music.mp3 -filter_complex 
-  //        "[1:a]volume=0.2[music];[0:a][music]amix=inputs=2:duration=first[a]"
-  //        -map 0:v -map "[a]" -c:v copy output.mp4
-  
-  return videoPath;
+const escapeSubtitlePath = (filePath: string): string => {
+  return filePath.replace(/:/g, '\\:');
 };
 
-/**
- * Gets video metadata (duration, resolution, etc.)
- */
-export const getVideoMetadata = async (videoPath: string): Promise<any> => {
-  logger.info('Getting video metadata', { videoPath });
-
-  // TODO: Use ffprobe to get video info
-  // ffprobe -v quiet -print_format json -show_format -show_streams video.mp4
-  
+const probeVideo = async (videoPath: string): Promise<RenderResult> => {
+  const { stdout } = await runCommand('ffprobe', [
+    '-v',
+    'error',
+    '-select_streams',
+    'v:0',
+    '-show_entries',
+    'stream=width,height,r_frame_rate',
+    '-show_entries',
+    'format=duration',
+    '-of',
+    'json',
+    videoPath,
+  ]);
+  const metadata = JSON.parse(stdout);
+  const stream = metadata.streams[0];
+  const duration = parseFloat(metadata.format.duration);
+  const [num, den] = stream.r_frame_rate.split('/').map(Number);
+  const fps = den ? num / den : config.render.fps;
   return {
-    duration: 60,
-    width: 1080,
-    height: 1920,
-    fps: 30,
+    videoPath,
+    duration,
+    width: stream.width,
+    height: stream.height,
+    fps,
   };
+};
+
+export const renderVideo = async (request: RenderRequest): Promise<RenderResult> => {
+  const options = mergeOptions(request.options);
+  await ensureDirectory(JOB_DIR);
+  const jobDir = path.join(JOB_DIR, request.jobId);
+  await ensureDirectory(jobDir);
+
+  const segmentPaths: string[] = [];
+  for (let index = 0; index < request.scenes.length; index += 1) {
+    const scene = request.scenes[index];
+    const safeName = `scene_${index + 1}`;
+    const segmentPath = path.join(jobDir, `${safeName}.mp4`);
+    await createSceneSegment(scene, segmentPath, options);
+    segmentPaths.push(segmentPath);
+    if (options.glitchTransitions && index < request.scenes.length - 1) {
+      const glitchPath = path.join(jobDir, `${safeName}_glitch.mp4`);
+      await createGlitchSegment(glitchPath, options);
+      segmentPaths.push(glitchPath);
+    }
+  }
+
+  const mergedVisualPath = path.join(jobDir, `${request.jobId}_visuals.mp4`);
+  await concatSegments(segmentPaths, mergedVisualPath);
+
+  let ambientPath: string | undefined;
+  if (options.includeMusic) {
+    ambientPath = path.join(jobDir, `${request.jobId}_ambient.wav`);
+    await createAmbientBed(ambientPath, request.narrationDuration, options.musicVolume);
+  }
+
+  await ensureDirectory(config.outputDir);
+  const finalVideoPath = path.join(config.outputDir, `${request.jobId}.mp4`);
+
+  const args = ['-y', '-i', mergedVisualPath, '-i', request.narrationAudioPath];
+  if (ambientPath) {
+    args.push('-i', ambientPath);
+  }
+
+  if (ambientPath) {
+    args.push(
+      '-filter_complex',
+      `[1:a]volume=1[a1];[2:a]volume=${options.musicVolume}[a2];[a1][a2]amix=inputs=2:duration=first[aout]`,
+      '-map',
+      '0:v:0',
+      '-map',
+      '[aout]'
+    );
+  } else {
+    args.push('-map', '0:v:0', '-map', '1:a:0');
+  }
+
+  args.push('-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest');
+
+  if (options.includeCaptions && request.subtitlesPath) {
+    args.push('-vf', `subtitles=${escapeSubtitlePath(request.subtitlesPath)}`);
+  }
+
+  args.push(finalVideoPath);
+
+  await runCommand('ffmpeg', args, { logLabel: 'final-render' });
+
+  return probeVideo(finalVideoPath);
 };

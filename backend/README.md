@@ -4,24 +4,24 @@ Backend service for the automated horror TikTok video generation pipeline.
 
 ## Overview
 
-This is a Node.js + TypeScript HTTP API that orchestrates the video generation process:
-- Accepts job requests via REST API
-- Generates horror story scripts using AI
-- Converts scripts to speech (TTS)
-- Generates visual assets with AI image generation
-- Renders final video with ffmpeg
-- Applies content safety filters
-- Manages storage and delivery
+This Node.js + TypeScript service turns a short horror prompt (or a fully provided script) into a ready-to-upload 9:16 MP4 complete with captions and publishing metadata.
 
-**Current Status:** This is a scaffold with stub implementations. Full video pipeline logic will be added in future iterations.
+Pipeline stages:
 
-## Prerequisites
+1. **Story crafting** – generate or validate a 140–180 word horror script with hook, build-up, twist and chilling ending.
+2. **Content safety** – soften risky terms and reject scripts that violate policy (self-harm, minors, sexual violence, real crimes, etc.).
+3. **Narration** – synthesize a placeholder vocal track (swap with your preferred TTS provider later).
+4. **Visuals** – create eerie scene cards (mocked via ffmpeg drawtext; pluggable for Stable Diffusion, Midjourney, etc.).
+5. **Captions** – auto-split narration into time-coded SRT subtitles and optionally burn them into the video.
+6. **Rendering** – stitch visuals, subtle glitch transitions, narration, ambient bed and captions into a 1080x1920 MP4 using ffmpeg.
+7. **Delivery** – save video + SRT into `/output`, return TikTok-ready description/hashtags and metadata via the jobs API.
 
-- Node.js 20.x or later
-- npm or yarn
-- ffmpeg (required for video rendering - will be used later)
+## Setup
 
-## Installation
+Requirements:
+
+- Node.js 20+
+- ffmpeg & ffprobe available on `PATH`
 
 Install dependencies:
 
@@ -29,143 +29,135 @@ Install dependencies:
 npm install
 ```
 
-## Configuration
-
-Copy the example environment file and configure:
+Copy env template:
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` to add your API keys and configuration:
-- `PORT`: Server port (default: 3000)
-- `OUTPUT_DIR`: Directory for generated videos
-- `ASSETS_DIR`: Directory for temporary assets
-- `TTS_API_URL`, `TTS_API_KEY`, `TTS_VOICE_ID`: Text-to-speech provider credentials
-- `IMAGE_API_URL`, `IMAGE_API_KEY`: Image generation provider credentials
-- `MAX_SCENES`: Maximum scenes per video (default: 8)
-- `MAX_VIDEO_DURATION_SECONDS`: Maximum video length (default: 70)
+Key variables:
 
-## Development
+| Variable | Description |
+| --- | --- |
+| `PORT` | Express server port |
+| `OUTPUT_DIR` | Folder for ready videos/subtitles |
+| `ASSETS_DIR` | Temp working directory for audio/images/intermediate files |
+| `MIN_STORY_WORD_COUNT` / `MAX_STORY_WORD_COUNT` | Safety rails for generated copy |
+| `TTS_*` | Plug your favourite text-to-speech API (mock tone out of the box) |
+| `IMAGE_*` | Placeholder for Stable Diffusion / Midjourney credentials |
+| `RENDER_*` | 9:16 output options, caption/music toggles, glitch transitions |
 
-Run the server in development mode with auto-reload:
+> The repo ships with mock TTS + visuals powered purely by ffmpeg so you can run the entire stack locally. Swap the implementations in `src/services/ttsService.ts` and `src/services/visualService.ts` when you connect real providers.
 
-```bash
-npm run dev
-```
-
-The server will start on `http://localhost:3000` (or your configured PORT).
-
-## Build
-
-Compile TypeScript to JavaScript:
+## Development & build
 
 ```bash
-npm run build
-```
-
-This creates a `dist/` folder with compiled files.
-
-## Production
-
-Run the compiled server:
-
-```bash
-npm start
+npm run dev       # ts-node-dev with hot reload
+npm run build     # compile to dist/
+npm start         # run compiled server
 ```
 
 ## Testing
-
-Run all tests:
 
 ```bash
 npm test
 ```
 
-Run tests in watch mode:
+`tests/integration.test.ts` mocks the creative services, sets `MOCK_FFMPEG=true`, and runs the full pipeline end-to-end, asserting a video + SRT land in `output/`. In real runs make sure ffmpeg/ffprobe are available on your `PATH`.
 
-```bash
-npm run test:watch
-```
+## API
 
-## API Endpoints
+### `GET /health`
 
-### Health Check
-```
-GET /health
-```
+Returns JSON with service version, ffmpeg availability, and live job stats.
 
-Returns server status and version.
+### `POST /jobs`
 
-### Job Management
-
-#### Create Job
-```
-POST /jobs
-Content-Type: application/json
-
+```json
 {
   "type": "horror_video",
-  "prompt": "A scary story about..."
+  "prompt": "Whispered coordinates that keep appearing in my stream chat"
 }
 ```
 
-Returns a job ID for tracking.
+Fields:
 
-#### Get Job Status
+| Field | Required | Description |
+| --- | --- | --- |
+| `type` | yes | Currently only `horror_video` |
+| `prompt` | yes* | Short seed idea for internal story generator |
+| `story` | optional | Provide `{ title?, description?, scenes: [{ description, narration, imagePrompt?, duration? }] }` to bypass AI story creation |
+| `options` | optional | Override render defaults (fps, captions, music, glitch toggles, etc.) |
+
+Either `prompt` or `story` must be supplied.
+
+### `GET /jobs/:id`
+
+Returns `{ status: "pending" | "running" | "failed" | "completed", progress, result? }`.
+
+Successful payload excerpt:
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "job_...",
+    "status": "completed",
+    "result": {
+      "videoUrl": "file:///workspace/TikTok-Automation/backend/output/job_...mp4",
+      "subtitlePath": ".../job_....srt",
+      "description": "The Midnight Echo — I hit record the moment...",
+      "hashtags": ["#horrortok", "#scarystory", "#aivideo", "#nightshift"],
+      "metadata": {
+        "durationSeconds": 60,
+        "numberOfScenes": 4,
+        "outputPath": "/workspace/.../output/job_....mp4"
+      }
+    }
+  }
+}
 ```
-GET /jobs/:id
-```
 
-Returns the current status and progress of a job.
-
-## Project Structure
+## Project structure
 
 ```
 src/
-├── index.ts              # Server entry point
-├── config/
-│   └── config.ts         # Configuration loader
-├── routes/
-│   ├── healthRoutes.ts   # Health check routes
-│   └── jobRoutes.ts      # Job management routes
-├── controllers/
-│   └── jobController.ts  # Job request handlers
+├── config/            # Env + defaults
+├── controllers/       # HTTP handlers
+├── routes/            # Express routers
 ├── services/
-│   ├── jobQueue.ts       # Job queue management
-│   ├── storyService.ts   # Story generation (stub)
-│   ├── ttsService.ts     # Text-to-speech (stub)
-│   ├── visualService.ts  # Image generation (stub)
-│   ├── renderService.ts  # Video rendering (stub)
-│   ├── captionService.ts # Caption generation (stub)
-│   ├── contentFilter.ts  # Content moderation (stub)
-│   └── storageService.ts # Storage management (stub)
-├── types/
-│   └── index.ts          # TypeScript type definitions
-└── utils/
-    ├── logger.ts         # Logging utility
-    ├── errorHandler.ts   # Error handling
-    └── fileUtils.ts      # File utilities
+│   ├── pipelineService.ts   # Orchestrates full job workflow
+│   ├── jobQueue.ts          # In-memory queue/worker
+│   ├── storyService.ts      # Deterministic story generator
+│   ├── contentFilter.ts     # Safety + sanitiser
+│   ├── ttsService.ts        # Mock TTS (swap with real provider)
+│   ├── visualService.ts     # Placeholder cards via ffmpeg drawtext
+│   ├── renderService.ts     # ffmpeg slideshow + audio mixing
+│   ├── captionService.ts    # Sentence-based caption timing
+│   └── storageService.ts    # Local persistence (swap with S3/R2)
+├── types/             # Shared interfaces
+└── utils/             # Logger, command runner, file helpers
 ```
 
-## Future Enhancements
+## Customisation guide
 
-The following features will be implemented in future iterations:
+| Layer | File | Notes |
+| --- | --- | --- |
+| Story | `src/services/storyService.ts` | Replace deterministic generator with GPT/Claude. Keep `StoryResult` shape. |
+| TTS | `src/services/ttsService.ts` | Call ElevenLabs/OpenAI Speech, save WAV/MP3 locally, return path. |
+| Visuals | `src/services/visualService.ts` | Call Stable Diffusion/SDXL/text-to-video provider; store returned file path. |
+| Moderation | `src/services/contentFilter.ts` | Integrate OpenAI Moderation, AWS Comprehend, or bespoke rules. |
+| Storage | `src/services/storageService.ts` | Upload to S3/R2/Supabase and update `getPublicUrl`. |
+| Queue | `src/services/jobQueue.ts` | Swap the in-memory queue for BullMQ/Redis for persistence + concurrency. |
 
-- **Story Generation**: Integration with LLM APIs (OpenAI, Anthropic, etc.) for horror story creation
-- **Text-to-Speech**: Integration with TTS providers (ElevenLabs, Google TTS, etc.)
-- **Image Generation**: Integration with AI image generators (DALL-E, Midjourney, Stable Diffusion)
-- **Video Rendering**: ffmpeg pipeline for combining audio, images, and effects
-- **Caption Overlay**: Automated caption generation and video overlay
-- **Background Music**: Audio mixing with royalty-free horror music
-- **Job Queue**: Persistent queue with Redis or BullMQ
-- **Storage**: S3-compatible storage for video hosting
-- **Content Safety**: AI-powered content moderation
-- **Rate Limiting**: API rate limiting and authentication
-- **Webhooks**: Callback notifications when jobs complete
+## Known limitations
 
-## Development Notes
+- Mock TTS + visuals are tonal placeholders; replace before publishing widely.
+- Job queue is in-memory; restart wipes active jobs.
+- Background ambience uses ffmpeg-generated noise. Bring your own licensed stems if preferred.
 
-- Currently all service methods return stub/mock data
-- Real implementations will be added after the scaffold is validated
-- Tests are minimal smoke tests to verify the API structure
+## Output
+
+- MP4 files: `backend/output/job_<timestamp>.mp4`
+- Captions: `backend/output/job_<timestamp>.srt`
+- API returns TikTok-ready description + hashtag bundle for quick manual posting.

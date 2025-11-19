@@ -1,106 +1,92 @@
-import { Scene } from '../types';
+import fs from 'fs/promises';
+import path from 'path';
+import { CaptionSegment, Scene } from '../types';
+import config from '../config/config';
 import logger from '../utils/logger';
+import { ensureDirectory } from '../utils/fileUtils';
 
-/**
- * Caption generation and formatting service
- * TODO: Implement caption generation from story/scenes
- */
+const splitIntoSentences = (text: string): string[] => {
+  const sanitized = text.replace(/\s+/g, ' ').trim();
+  const matches = sanitized.match(/[^.!?]+[.!?]?/g);
+  return matches ? matches.map(sentence => sentence.trim()) : [sanitized];
+};
 
-export interface Caption {
-  index: number;
-  startTime: number;
-  endTime: number;
-  text: string;
-}
+const wordCount = (text: string): number => {
+  if (!text) return 0;
+  return text.split(/\s+/).length;
+};
 
-/**
- * Generates captions from scenes
- * Currently returns stub data
- */
-export const generateCaptions = async (scenes: Scene[]): Promise<Caption[]> => {
-  logger.info('Generating captions', { sceneCount: scenes.length });
+const wrapCaption = (text: string, maxLineLength = 36): string => {
+  const words = text.split(' ');
+  const lines: string[] = [];
+  let current = '';
 
-  // TODO: Implement caption generation
-  // 1. Extract narration from each scene
-  // 2. Split into time-aligned segments
-  // 3. Format for readability (max characters per line, etc.)
-  // 4. Calculate timing based on speech rate
-  
-  const captions: Caption[] = scenes.map((scene, index) => ({
-    index: index + 1,
-    startTime: index * 10, // Stub timing
-    endTime: (index + 1) * 10,
-    text: scene.narration,
-  }));
+  words.forEach(word => {
+    if ((current + word).length <= maxLineLength) {
+      current = current ? `${current} ${word}` : word;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  });
+
+  if (current) lines.push(current);
+  return lines.join('\n');
+};
+
+export const generateCaptions = (scenes: Scene[]): CaptionSegment[] => {
+  const captions: CaptionSegment[] = [];
+  let cursor = 0;
+
+  scenes.forEach(scene => {
+    const sceneDuration = scene.duration || 6;
+    const sentences = splitIntoSentences(scene.narration);
+    const totalWords = sentences.reduce((total, sentence) => total + wordCount(sentence), 0) || 1;
+    let localCursor = cursor;
+
+    sentences.forEach(sentence => {
+      const portion = wordCount(sentence) / totalWords;
+      const captionDuration = sceneDuration * (portion || 1 / sentences.length);
+      const caption: CaptionSegment = {
+        index: captions.length + 1,
+        startTime: parseFloat(localCursor.toFixed(2)),
+        endTime: parseFloat((localCursor + captionDuration).toFixed(2)),
+        text: wrapCaption(sentence),
+      };
+      captions.push(caption);
+      localCursor += captionDuration;
+    });
+
+    cursor += sceneDuration;
+  });
 
   return captions;
 };
 
-/**
- * Converts captions to SRT format
- */
-export const formatAsSRT = (captions: Caption[]): string => {
-  logger.info('Formatting captions as SRT', { count: captions.length });
-
-  // TODO: Implement proper SRT formatting
-  // Format:
-  // 1
-  // 00:00:00,000 --> 00:00:05,000
-  // Caption text here
-  
-  let srt = '';
-  captions.forEach((caption) => {
-    srt += `${caption.index}\n`;
-    srt += `${formatTimestamp(caption.startTime)} --> ${formatTimestamp(caption.endTime)}\n`;
-    srt += `${caption.text}\n\n`;
-  });
-
-  return srt;
-};
-
-/**
- * Converts captions to WebVTT format
- */
-export const formatAsWebVTT = (captions: Caption[]): string => {
-  logger.info('Formatting captions as WebVTT', { count: captions.length });
-
-  let vtt = 'WEBVTT\n\n';
-  captions.forEach((caption) => {
-    vtt += `${formatTimestamp(caption.startTime)} --> ${formatTimestamp(caption.endTime)}\n`;
-    vtt += `${caption.text}\n\n`;
-  });
-
-  return vtt;
-};
-
-/**
- * Formats time in seconds to SRT timestamp format (HH:MM:SS,mmm)
- */
 const formatTimestamp = (seconds: number): string => {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = Math.floor(seconds % 60);
-  const millis = Math.floor((seconds % 1) * 1000);
-
-  return `${pad(hours)}:${pad(minutes)}:${pad(secs)},${pad(millis, 3)}`;
+  const date = new Date(seconds * 1000);
+  const hh = String(date.getUTCHours()).padStart(2, '0');
+  const mm = String(date.getUTCMinutes()).padStart(2, '0');
+  const ss = String(date.getUTCSeconds()).padStart(2, '0');
+  const ms = String(date.getUTCMilliseconds()).padStart(3, '0');
+  return `${hh}:${mm}:${ss},${ms}`;
 };
 
-/**
- * Pads number with leading zeros
- */
-const pad = (num: number, length: number = 2): string => {
-  return num.toString().padStart(length, '0');
+export const captionsToSrt = (captions: CaptionSegment[]): string => {
+  return captions
+    .map(caption => {
+      return `${caption.index}\n${formatTimestamp(caption.startTime)} --> ${formatTimestamp(caption.endTime)}\n${caption.text}\n`;
+    })
+    .join('\n');
 };
 
-/**
- * Saves captions to file
- */
 export const saveCaptionsToFile = async (
-  _captions: Caption[],
-  _format: 'srt' | 'vtt',
-  _filePath: string
-): Promise<void> => {
-  // TODO: Implement file writing
-  // const content = format === 'srt' ? formatAsSRT(captions) : formatAsWebVTT(captions);
-  // await fs.writeFile(filePath, content, 'utf-8');
+  captions: CaptionSegment[],
+  jobId: string
+): Promise<string> => {
+  await ensureDirectory(config.outputDir);
+  const filePath = path.join(config.outputDir, `${jobId}.srt`);
+  await fs.writeFile(filePath, captionsToSrt(captions), 'utf-8');
+  logger.info('Saved captions', { filePath });
+  return filePath;
 };

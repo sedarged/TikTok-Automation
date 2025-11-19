@@ -1,75 +1,67 @@
-import { JobStatus, JobStatusType } from '../types';
+import { CreateJobRequest, JobResultData, JobStatus } from '../types';
 import logger from '../utils/logger';
 
-/**
- * Simple in-memory job queue
- * TODO: Replace with persistent queue (Redis, BullMQ) for production
- */
+interface JobData extends JobStatus {}
 
-interface JobData {
-  id: string;
-  type: string;
-  status: JobStatusType;
-  progress: number;
-  result?: any;
-  error?: string;
-  createdAt: Date;
-  updatedAt: Date;
-  completedAt?: Date;
+interface QueueItem {
+  jobId: string;
+  payload: JobPayload;
 }
+
+export interface JobPayload {
+  request: CreateJobRequest;
+}
+
+type JobProcessor = (job: JobData, payload: JobPayload) => Promise<JobResultData>;
 
 class JobQueue {
   private jobs: Map<string, JobData> = new Map();
 
-  /**
-   * Creates a new job in the queue
-   */
-  createJob(type: string): JobStatus {
-    const id = this.generateJobId();
-    const now = new Date();
+  private queue: QueueItem[] = [];
 
+  private processor?: JobProcessor;
+
+  private processing = false;
+
+  private processedCount = 0;
+
+  private failedCount = 0;
+
+  registerProcessor(processor: JobProcessor): void {
+    this.processor = processor;
+  }
+
+  createJob(request: CreateJobRequest): JobStatus {
+    const jobId = this.generateJobId();
+    const now = new Date();
     const job: JobData = {
-      id,
-      type,
+      id: jobId,
+      type: request.type,
       status: 'pending',
       progress: 0,
       createdAt: now,
       updatedAt: now,
     };
-
-    this.jobs.set(id, job);
-    logger.info('Job created', { jobId: id, type });
-
+    this.jobs.set(jobId, job);
+    this.queue.push({ jobId, payload: { request } });
+    logger.info('Job queued', { jobId, type: request.type });
+    void this.processNext();
     return job;
   }
 
-  /**
-   * Gets a job by ID
-   */
   getJob(id: string): JobStatus | null {
-    const job = this.jobs.get(id);
-    return job || null;
+    return this.jobs.get(id) || null;
   }
 
-  /**
-   * Updates a job's status
-   */
   updateJob(id: string, updates: Partial<JobData>): void {
     const job = this.jobs.get(id);
-    if (!job) {
-      logger.warn('Attempted to update non-existent job', { jobId: id });
-      return;
-    }
-
+    if (!job) return;
     Object.assign(job, updates, { updatedAt: new Date() });
     this.jobs.set(id, job);
-    logger.info('Job updated', { jobId: id, status: job.status });
   }
 
-  /**
-   * Marks a job as completed
-   */
-  completeJob(id: string, result: any): void {
+  completeJob(id: string, result: JobResultData): void {
+    this.processedCount += 1;
     this.updateJob(id, {
       status: 'completed',
       progress: 100,
@@ -78,10 +70,8 @@ class JobQueue {
     });
   }
 
-  /**
-   * Marks a job as failed
-   */
   failJob(id: string, error: string): void {
+    this.failedCount += 1;
     this.updateJob(id, {
       status: 'failed',
       error,
@@ -89,11 +79,62 @@ class JobQueue {
     });
   }
 
-  /**
-   * Generates a unique job ID
-   */
+  registerProgress(id: string, progress: number, stage: string): void {
+    this.updateJob(id, { progress });
+    logger.info('Job progress update', { jobId: id, progress, stage });
+  }
+
+  getStats() {
+    let running = 0;
+    let completed = 0;
+    let failed = 0;
+    this.jobs.forEach(job => {
+      if (job.status === 'running') running += 1;
+      if (job.status === 'completed') completed += 1;
+      if (job.status === 'failed') failed += 1;
+    });
+
+    return {
+      total: this.jobs.size,
+      completed,
+      failed,
+      running,
+      processedCount: this.processedCount,
+      failedCount: this.failedCount,
+    };
+  }
+
+  private async processNext(): Promise<void> {
+    if (this.processing) return;
+    if (!this.processor) {
+      logger.warn('No job processor registered');
+      return;
+    }
+    const next = this.queue.shift();
+    if (!next) return;
+    const job = this.jobs.get(next.jobId);
+    if (!job) return;
+
+    this.processing = true;
+    this.updateJob(job.id, { status: 'running', progress: 5 });
+
+    try {
+      const result = await this.processor(job, next.payload);
+      this.completeJob(job.id, result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('Job failed', { jobId: job.id, error: message });
+      this.failJob(job.id, message);
+    } finally {
+      this.processing = false;
+      if (this.queue.length > 0) {
+        void this.processNext();
+      }
+    }
+  }
+
   private generateJobId(): string {
-    return `job_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    return `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   }
 }
 
