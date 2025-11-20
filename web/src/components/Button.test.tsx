@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { axe } from 'jest-axe';
+import { axe } from 'vitest-axe';
 import Button from './Button';
 
 describe('Button', () => {
@@ -14,6 +14,6 @@ describe('Button', () => {
   it('passes basic a11y checks', async () => {
     const { container } = render(<Button>Accessible</Button>);
     const results = await axe(container);
-    expect(results.violations).toHaveLength(0);
+    expect(results).toHaveNoViolations();
   });
 });
